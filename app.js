@@ -1,4 +1,3 @@
-
 (() => {
   "use strict";
 
@@ -111,17 +110,56 @@
 
     try {
       if (on) {
+        // Request maximum resolution + frame rate the device will give
         cameraStream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 4096 },
+            height: { ideal: 2160 },
+            frameRate: { ideal: 60 },
           },
           audio: false,
         });
+
+        const track = cameraStream.getVideoTracks()[0];
+        const caps = track.getCapabilities?.() || {};
+        const advanced = {};
+        if (caps.width?.max) advanced.width = caps.width.max;
+        if (caps.height?.max) advanced.height = caps.height.max;
+        if (caps.frameRate?.max) advanced.frameRate = caps.frameRate.max;
+        if (Object.keys(advanced).length) {
+          try {
+            await track.applyConstraints({ advanced: [advanced] });
+          } catch (_) {
+            // Some browsers reject combined max constraints — try one at a time
+            try {
+              if (caps.width?.max && caps.height?.max) {
+                await track.applyConstraints({
+                  width: caps.width.max,
+                  height: caps.height.max,
+                });
+              }
+            } catch (_) {}
+            try {
+              if (caps.frameRate?.max) {
+                await track.applyConstraints({ frameRate: caps.frameRate.max });
+              }
+            } catch (_) {}
+          }
+        }
+
         video.srcObject = cameraStream;
         wrap.classList.add("active");
-        status.textContent = "Rear camera active";
+
+        const settings = track.getSettings?.() || {};
+        const res =
+          (settings.width && settings.height)
+            ? `${settings.width}×${settings.height}`
+            : "max";
+        const fpsStr = settings.frameRate
+          ? ` · ${Math.round(settings.frameRate)} fps`
+          : "";
+        status.textContent = `Rear camera active — ${res}${fpsStr}`;
         status.className = "status on";
         active.camera = true;
       } else {
@@ -588,20 +626,24 @@
   }
 
   function applyWebglLoad(level) {
-    webglLoad = Math.max(5, Math.min(100, level));
-    // scale: 0.45 → 2.0 — low end light enough for ~60 FPS on most phones
-    webglScale = 0.45 + (webglLoad / 100) * 1.55;
-    // ray steps: 40 → 320
-    webglSteps = Math.round(40 + (webglLoad / 100) * 280);
-    // passes: 1 → 5
-    webglPasses = Math.max(1, Math.round(1 + (webglLoad / 100) * 4));
+    // Allow >100 for sub-15 FPS targets (extra passes / scale beyond base max)
+    webglLoad = Math.max(5, Math.min(160, level));
+    const t = Math.min(webglLoad, 100) / 100;
+    const over = Math.max(0, webglLoad - 100); // 0–60 beyond 100%
+
+    // scale: 0.45 → 2.0 at 100%, up to ~2.8 past 100%
+    webglScale = 0.45 + t * 1.55 + over * 0.014;
+    // ray steps: 40 → 360 at 100%, up to ~480 past 100%
+    webglSteps = Math.round(40 + t * 320 + over * 2);
+    // passes: 1 → 5 at 100%, up to 12 past 100%
+    webglPasses = Math.max(1, Math.round(1 + t * 4 + over * 0.12));
 
     if (!gl) return;
 
     const cssW = Math.min(window.innerWidth - 28, 480);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-    const w = Math.min(1280, Math.round(cssW * dpr * webglScale));
-    const h = Math.min(1280, Math.round(cssW * dpr * webglScale));
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const w = Math.min(2048, Math.round(cssW * dpr * webglScale));
+    const h = Math.min(2048, Math.round(cssW * dpr * webglScale));
     if (Math.abs(canvas.width - w) > 4 || Math.abs(canvas.height - h) > 4) {
       canvas.width = w;
       canvas.height = h;
@@ -612,25 +654,32 @@
     }
     if (glStepsLoc) gl.uniform1f(glStepsLoc, webglSteps);
 
+    const pct = webglLoad > 100 ? Math.round(webglLoad) + "%+" : Math.round(webglLoad) + "%";
     document.getElementById("loadCounter").textContent =
-      Math.round(webglLoad) + "% (" + canvas.width + "px · " + webglSteps + " steps · ×" + webglPasses + ")";
+      pct + " (" + canvas.width + "px · " + webglSteps + " steps · ×" + webglPasses + ")";
   }
 
   function startLoadForGoal(g) {
     if (g >= 50) return 15;
     if (g >= 35) return 30;
     if (g >= 20) return 50;
-    if (g >= 10) return 70;
-    return 90;
+    if (g >= 15) return 70;
+    if (g >= 8) return 100;
+    return 130; // very low goals start past 100%
   }
 
   function adjustWebglTowardGoal() {
     if (fps <= 0) return;
     const error = goalFps - fps;
-    // ±3 FPS dead zone
-    if (Math.abs(error) < 3) return;
-    // Symmetric control — reduce load as aggressively as increase
-    const step = Math.max(3, Math.min(12, Math.abs(error) * 0.8));
+    // Tighter dead zone at low goals so we keep pushing
+    const dead = goalFps < 15 ? 1.5 : 3;
+    if (Math.abs(error) < dead) return;
+
+    let step = Math.max(3, Math.min(12, Math.abs(error) * 0.8));
+    // When aiming below 15 and still too fast, ramp harder / allow over-100
+    if (error < 0 && goalFps < 15) {
+      step = Math.max(6, Math.min(20, Math.abs(error) * 1.5));
+    }
     if (error < 0) applyWebglLoad(webglLoad + step); // too fast → heavier
     else applyWebglLoad(webglLoad - step);           // too slow → lighter
   }
@@ -889,7 +938,7 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "7";
+  const BUILD_ID = "8";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
