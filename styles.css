@@ -53,6 +53,14 @@ header h1 {
   margin-top: 4px;
 }
 
+.build-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  opacity: 0.6;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--border);
