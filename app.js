@@ -245,10 +245,12 @@
     };
 
     let urlIndex = 0;
+    // Keep multiple downloads in flight so traffic never pauses between requests
+    const CONCURRENCY = 4;
 
-    try {
+    async function oneDownload() {
       while (performance.now() < endAt && !downloadAbort.signal.aborted) {
-        const url = DOWNLOAD_URLS[urlIndex % DOWNLOAD_URLS.length] + "&t=" + Date.now();
+        const url = DOWNLOAD_URLS[urlIndex % DOWNLOAD_URLS.length] + "&t=" + Date.now() + "&r=" + Math.random();
         urlIndex++;
 
         try {
@@ -257,20 +259,21 @@
             cache: "no-store",
             mode: "cors",
           });
-          if (!res.ok && res.status !== 0) {
-            continue;
-          }
+          if (!res.ok && res.status !== 0) continue;
+
           const reader = res.body?.getReader();
           if (reader) {
             while (true) {
-              if (performance.now() >= endAt || downloadAbort.signal.aborted) break;
+              if (performance.now() >= endAt || downloadAbort.signal.aborted) {
+                try { reader.cancel(); } catch (_) {}
+                break;
+              }
               const { done, value } = await reader.read();
               if (done) break;
               downloadBytes += value.byteLength;
               speedWindowBytes += value.byteLength;
               updateStatus();
             }
-            try { reader.cancel(); } catch (_) {}
           } else {
             const buf = await res.arrayBuffer();
             downloadBytes += buf.byteLength;
@@ -278,23 +281,31 @@
             updateStatus();
           }
         } catch (err) {
-          if (err.name === "AbortError") break;
-          const size = 8 * 1024 * 1024;
+          if (err.name === "AbortError") return;
+          // Fallback: local memory churn — no delay, loop immediately
+          const size = 16 * 1024 * 1024;
           const buffer = new ArrayBuffer(size);
           const view = new Uint8Array(buffer);
-          for (let i = 0; i < size; i += 4096) view[i] = i & 0xff;
+          for (let i = 0; i < size; i += 2048) view[i] = i & 0xff;
           downloadBytes += size;
           speedWindowBytes += size;
           updateStatus();
           const blob = new Blob([buffer]);
           const objUrl = URL.createObjectURL(blob);
           try {
-            await fetch(objUrl, { signal: downloadAbort.signal });
+            await fetch(objUrl, { signal: downloadAbort.signal, cache: "no-store" });
           } catch (_) {}
           URL.revokeObjectURL(objUrl);
-          await new Promise((r) => setTimeout(r, 50));
+          // no sleep — immediately start next chunk
         }
       }
+    }
+
+    try {
+      // Launch concurrent workers so bandwidth stays saturated
+      await Promise.all(
+        Array.from({ length: CONCURRENCY }, () => oneDownload())
+      );
     } finally {
       active.download = false;
       updatePower();
@@ -349,12 +360,12 @@
   function applyLoadLevel(level) {
     // level 0–100 maps to resolution and iterations
     loadLevel = Math.max(5, Math.min(100, level));
-    // Resolution: 80×80 at low load → 360×360 at high
-    const side = Math.round(80 + (loadLevel / 100) * 280);
+    // Resolution: 160×160 at low → 960×960 at high (much heavier)
+    const side = Math.round(160 + (loadLevel / 100) * 800);
     currentW = side;
     currentH = side;
-    // Iterations: 12 at low → 96 at high
-    maxIter = Math.round(12 + (loadLevel / 100) * 84);
+    // Iterations: 32 at low → 320 at high
+    maxIter = Math.round(32 + (loadLevel / 100) * 288);
 
     canvas.width = currentW;
     canvas.height = currentH;
@@ -563,4 +574,32 @@
 
   // Initial power
   updatePower();
+
+  // ---------- Auto-update (detect new deploy without hard refresh) ----------
+  // Bump BUILD_ID whenever you push a new version to GitHub Pages.
+  const BUILD_ID = "3";
+  const CHECK_EVERY_MS = 45_000;
+
+  async function checkForUpdate() {
+    try {
+      // Fetch index.html with cache-bust so we always see the latest deploy
+      const res = await fetch("index.html?_=" + Date.now(), { cache: "no-store" });
+      if (!res.ok) return;
+      const html = await res.text();
+      // Look for styles.css?v=N or app.js?v=N or buildTag text
+      const match = html.match(/[?&]v=(\d+)/) || html.match(/build-tag[^>]*>v?(\d+)/i);
+      if (match && match[1] !== BUILD_ID) {
+        // Soft reload to pick up new assets
+        location.reload();
+      }
+    } catch (_) {
+      // offline / CORS — ignore
+    }
+  }
+
+  setInterval(checkForUpdate, CHECK_EVERY_MS);
+  // Also check when tab becomes visible again
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkForUpdate();
+  });
 })();
