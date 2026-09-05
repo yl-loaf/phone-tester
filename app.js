@@ -12,6 +12,7 @@
     cpu: 4.0,        // multi-core busy workers (scaled by worker count)
     download: 1.5,   // radio + modem under load
     gpu: 3.5,        // heavy GPU (canvas or WebGL volume)
+    mic: 0.5,        // mic + DSP
     tone: 0.4,       // speaker / audio amp
   };
 
@@ -23,6 +24,7 @@
     cpu: false,
     download: false,
     gpu: false,
+    mic: false,
     tone: false,
   };
 
@@ -919,7 +921,7 @@
       float t = 0.0;
       float d = 1.0;
       int hit = 0;
-      for (int i = 0; i < 768; i++) {
+      for (int i = 0; i < 1024; i++) {
         if (float(i) >= u_steps) break;
         vec3 p = ro + rd * t;
         d = map(p);
@@ -965,8 +967,8 @@
 
     // scale: 0.45 → 2.0 at 100%, up to ~3.2 past 100%
     webglScale = 0.45 + t * 1.55 + over * 0.012;
-    // ray steps: 40 → 400 at 100%, up to ~700 past 100% (hits low goal FPS)
-    webglSteps = Math.round(40 + t * 360 + over * 3);
+    // ray steps: 48 → 480 at 100%, up to ~900 past 100%
+    webglSteps = Math.round(48 + t * 432 + over * 4.2);
     // passes: 1 → 6 at 100%, up to 16 past 100%
     webglPasses = Math.max(1, Math.round(1 + t * 5 + over * 0.1));
 
@@ -1177,6 +1179,144 @@
   goalFps = 15;
   updateModeUI();
 
+  // ---------- Microphone (amplitude + peak frequency) ----------
+  let micStream = null;
+  let micAudioCtx = null;
+  let micAnalyser = null;
+  let micSource = null;
+  let micRaf = null;
+  let micTimeData = null;
+  let micFreqData = null;
+
+  function stopMic() {
+    if (micRaf) {
+      cancelAnimationFrame(micRaf);
+      micRaf = null;
+    }
+    if (micSource) {
+      try { micSource.disconnect(); } catch (_) {}
+      micSource = null;
+    }
+    if (micAnalyser) {
+      try { micAnalyser.disconnect(); } catch (_) {}
+      micAnalyser = null;
+    }
+    if (micStream) {
+      micStream.getTracks().forEach((t) => t.stop());
+      micStream = null;
+    }
+    if (micAudioCtx) {
+      try { micAudioCtx.close(); } catch (_) {}
+      micAudioCtx = null;
+    }
+    micTimeData = null;
+    micFreqData = null;
+    const ampBar = document.getElementById("micAmpBar");
+    const freqBar = document.getElementById("micFreqBar");
+    if (ampBar) ampBar.style.width = "0%";
+    if (freqBar) freqBar.style.width = "0%";
+    const ampVal = document.getElementById("micAmpValue");
+    const freqVal = document.getElementById("micFreqValue");
+    if (ampVal) ampVal.textContent = "0%";
+    if (freqVal) freqVal.textContent = "— Hz";
+  }
+
+  function micLoop() {
+    if (!micAnalyser || !active.mic) return;
+
+    micAnalyser.getByteTimeDomainData(micTimeData);
+    // RMS amplitude 0–1 from time domain (128 = silence)
+    let sumSq = 0;
+    for (let i = 0; i < micTimeData.length; i++) {
+      const v = (micTimeData[i] - 128) / 128;
+      sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / micTimeData.length);
+    // Scale for display (typical speech ~0.05–0.3)
+    const ampPct = Math.min(100, Math.round(rms * 250));
+
+    micAnalyser.getByteFrequencyData(micFreqData);
+    // Dominant frequency bin (skip DC bin 0)
+    let maxBin = 1;
+    let maxVal = 0;
+    for (let i = 1; i < micFreqData.length; i++) {
+      if (micFreqData[i] > maxVal) {
+        maxVal = micFreqData[i];
+        maxBin = i;
+      }
+    }
+    const sampleRate = micAudioCtx.sampleRate;
+    const binHz = sampleRate / micAnalyser.fftSize;
+    const peakHz = Math.round(maxBin * binHz);
+    // Only show frequency if there's meaningful energy
+    const hasSignal = ampPct >= 2 && maxVal > 20;
+
+    document.getElementById("micAmpBar").style.width = ampPct + "%";
+    document.getElementById("micAmpValue").textContent = ampPct + "%";
+    if (hasSignal) {
+      const freqPct = Math.min(100, (peakHz / 4000) * 100);
+      document.getElementById("micFreqBar").style.width = freqPct + "%";
+      document.getElementById("micFreqValue").textContent = peakHz + " Hz";
+      document.getElementById("micStatus").textContent =
+        "Live — amp " + ampPct + "% · peak ~" + peakHz + " Hz";
+    } else {
+      document.getElementById("micFreqBar").style.width = "0%";
+      document.getElementById("micFreqValue").textContent = "— Hz";
+      document.getElementById("micStatus").textContent = "Listening… (quiet)";
+    }
+    document.getElementById("micStatus").className = "status on";
+
+    micRaf = requestAnimationFrame(micLoop);
+  }
+
+  async function setMic(on) {
+    const status = document.getElementById("micStatus");
+    if (on) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+          video: false,
+        });
+        micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (micAudioCtx.state === "suspended") await micAudioCtx.resume();
+        micSource = micAudioCtx.createMediaStreamSource(micStream);
+        micAnalyser = micAudioCtx.createAnalyser();
+        micAnalyser.fftSize = 2048;
+        micAnalyser.smoothingTimeConstant = 0.7;
+        micSource.connect(micAnalyser);
+        // Do not connect to destination (would cause feedback)
+        micTimeData = new Uint8Array(micAnalyser.fftSize);
+        micFreqData = new Uint8Array(micAnalyser.frequencyBinCount);
+        active.mic = true;
+        updatePower();
+        status.textContent = "Listening…";
+        status.className = "status on";
+        micRaf = requestAnimationFrame(micLoop);
+      } catch (err) {
+        stopMic();
+        status.textContent = "Error: " + (err.message || err.name);
+        status.className = "status warn";
+        document.getElementById("micToggle").checked = false;
+        active.mic = false;
+        updatePower();
+      }
+    } else {
+      active.mic = false;
+      stopMic();
+      status.textContent = "Off";
+      status.className = "status";
+      updatePower();
+    }
+  }
+
+  document.getElementById("micToggle").addEventListener("change", (e) => {
+    setMic(e.target.checked);
+  });
+
   // ---------- Tone generator ----------
   let audioCtx = null;
   let oscillator = null;
@@ -1266,6 +1406,7 @@
     setLocation(false);
     setCpu(false);
     setGpu(false);
+    setMic(false);
     setTone(false);
   });
 
@@ -1298,7 +1439,7 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "11";
+  const BUILD_ID = "12";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
