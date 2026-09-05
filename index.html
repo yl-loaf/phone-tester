@@ -12,7 +12,7 @@
   <meta http-equiv="Expires" content="0" />
   <title>Phone Stress Tester</title>
   <!-- Bump ?v= when you deploy so browsers fetch fresh assets -->
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=11" />
 </head>
 <body>
   <div class="app">
@@ -21,7 +21,7 @@
         <h1>Phone Stress Tester</h1>
         <button type="button" id="themeToggle" class="theme-btn" aria-label="Toggle light mode">Light</button>
       </div>
-      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v10</span></p>
+      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v11</span></p>
     </header>
 
     <section class="card power-card">
@@ -86,6 +86,25 @@
       </div>
       <p class="status" id="locationStatus">Off</p>
       <p class="hint">High-accuracy GPS with long timeouts. On timeout, falls back to network location and keeps retrying. Best outdoors with Location enabled.</p>
+    </section>
+
+    <!-- CPU stress -->
+    <section class="card">
+      <div class="card-header">
+        <h2>CPU stress</h2>
+        <label class="switch">
+          <input type="checkbox" id="cpuToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="controls">
+        <label>
+          Workers <span id="cpuWorkersValue">0</span>
+          <input type="range" id="cpuWorkersSlider" min="1" max="16" value="0" step="1" />
+        </label>
+      </div>
+      <p class="status" id="cpuStatus">Off</p>
+      <p class="hint">Spawns Web Workers running busy math loops. Defaults to hardwareConcurrency. Browsers/OS may still throttle; keep the tab visible for max load.</p>
     </section>
 
     <!-- Network stress -->
@@ -167,6 +186,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>
