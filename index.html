@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Phone Stress Tester</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Phone Stress Tester</h1>
+      <p class="subtitle">Battery &amp; hardware stress tools</p>
+    </header>
+
+    <section class="card power-card">
+      <h2>Estimated Power Draw</h2>
+      <div class="power-display">
+        <span id="powerWatts">0.0</span><span class="unit">W</span>
+      </div>
+      <p class="hint">Rough estimate only — browsers cannot read real power draw.</p>
+    </section>
+
+    <!-- Torch -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Torch / Flashlight</h2>
+        <label class="switch">
+          <input type="checkbox" id="torchToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <p class="status" id="torchStatus">Off</p>
+      <p class="hint">Uses rear camera torch. Requires permission. Max brightness when supported.</p>
+    </section>
+
+    <!-- Camera -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Rear Camera</h2>
+        <label class="switch">
+          <input type="checkbox" id="cameraToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="camera-wrap">
+        <video id="cameraPreview" playsinline muted autoplay></video>
+        <canvas id="cameraCanvas" style="display:none"></canvas>
+      </div>
+      <p class="status" id="cameraStatus">Off</p>
+    </section>
+
+    <!-- Vibration -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Constant Vibration</h2>
+        <label class="switch">
+          <input type="checkbox" id="vibrateToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <p class="status" id="vibrateStatus">Off</p>
+      <p class="hint">Uses navigator.vibrate in a loop. May be limited by the browser/OS.</p>
+    </section>
+
+    <!-- Network stress -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Network Download Stress</h2>
+        <label class="switch">
+          <input type="checkbox" id="downloadToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="controls">
+        <label>
+          Duration (seconds)
+          <input type="number" id="downloadDuration" value="0" min="0" step="1" />
+          <span class="hint-inline">0 = infinite</span>
+        </label>
+      </div>
+      <p class="status" id="downloadStatus">Idle — 0 MB</p>
+      <p class="hint">Repeatedly fetches large remote files to keep the radio active.</p>
+    </section>
+
+    <!-- GPU / Fractals -->
+    <section class="card">
+      <div class="card-header">
+        <h2>GPU Fractal Tester</h2>
+        <label class="switch">
+          <input type="checkbox" id="gpuToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <canvas id="fractalCanvas" width="400" height="400"></canvas>
+      <p class="status">FPS: <span id="fpsCounter">0</span></p>
+      <p class="hint">Animated Julia set on canvas. Higher load on GPU/CPU.</p>
+    </section>
+
+    <!-- Audio tone -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Tone Generator</h2>
+        <label class="switch">
+          <input type="checkbox" id="toneToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="controls">
+        <label>
+          Frequency <span id="freqValue">440</span> Hz
+          <input type="range" id="freqSlider" min="50" max="2000" value="440" step="1" />
+        </label>
+        <label>
+          Volume <span id="volValue">30</span>%
+          <input type="range" id="volSlider" min="0" max="100" value="30" step="1" />
+        </label>
+      </div>
+      <p class="status" id="toneStatus">Off</p>
+    </section>
+
+    <footer>
+      <p>Open this page on your phone. Grant permissions when asked.</p>
+      <p class="small">GitHub Pages ready · No backend required</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
