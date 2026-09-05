@@ -12,7 +12,7 @@
   <meta http-equiv="Expires" content="0" />
   <title>Phone Stress Tester</title>
   <!-- Bump ?v= when you deploy so browsers fetch fresh assets -->
-  <link rel="stylesheet" href="styles.css?v=9" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <div class="app">
@@ -21,7 +21,7 @@
         <h1>Phone Stress Tester</h1>
         <button type="button" id="themeToggle" class="theme-btn" aria-label="Toggle light mode">Light</button>
       </div>
-      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v9</span></p>
+      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v10</span></p>
     </header>
 
     <section class="card power-card">
@@ -85,7 +85,7 @@
         </label>
       </div>
       <p class="status" id="locationStatus">Off</p>
-      <p class="hint">Keeps requesting GPS (high accuracy) as often as the browser allows until turned off. Uses radio + GNSS.</p>
+      <p class="hint">High-accuracy GPS with long timeouts. On timeout, falls back to network location and keeps retrying. Best outdoors with Location enabled.</p>
     </section>
 
     <!-- Network stress -->
@@ -167,6 +167,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
