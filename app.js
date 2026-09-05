@@ -2,13 +2,15 @@
   "use strict";
 
   // ---------- Power estimation (rough) ----------
+  // Approximate incremental draw in watts when each feature is active.
+  // These are educated guesses for a typical modern phone.
   const POWER = {
-    torch: 1.2,
-    camera: 1.8,
-    vibrate: 0.9,
-    download: 1.5,
-    gpu: 2.5,
-    tone: 0.4,
+    torch: 1.2,      // LED flashlight
+    camera: 1.8,     // camera pipeline + ISP
+    vibrate: 0.9,    // haptic motor continuous
+    download: 1.5,   // radio + modem under load
+    gpu: 2.5,        // heavy GPU/CPU canvas work
+    tone: 0.4,       // speaker / audio amp
   };
 
   const active = {
@@ -21,7 +23,7 @@
   };
 
   function updatePower() {
-    let total = 0.3;
+    let total = 0.3; // baseline idle-ish browser
     for (const k of Object.keys(POWER)) {
       if (active[k]) total += POWER[k];
     }
@@ -36,8 +38,12 @@
     const status = document.getElementById("torchStatus");
     try {
       if (on) {
+        // Prefer a dedicated stream for torch so it can stay on independently
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: {
+            facingMode: { ideal: "environment" },
+            // Some browsers accept torch in constraints
+          },
           audio: false,
         });
         torchStream = stream;
@@ -48,6 +54,7 @@
           await torchTrack.applyConstraints({
             advanced: [{ torch: true }],
           });
+          // Try to push brightness if supported (rare)
           if (capabilities.brightness) {
             try {
               await torchTrack.applyConstraints({
@@ -59,9 +66,10 @@
           status.className = "status on";
           active.torch = true;
         } else {
+          // Fallback: keep stream alive; torch may not be controllable
           status.textContent = "Camera open — torch not supported on this device/browser";
           status.className = "status warn";
-          active.torch = true;
+          active.torch = true; // still costs camera power
         }
       } else {
         if (torchTrack) {
@@ -151,6 +159,7 @@
         document.getElementById("vibrateToggle").checked = false;
         return;
       }
+      // Continuous-ish: vibrate pattern that restarts
       const pattern = [200, 50];
       navigator.vibrate(pattern);
       vibrateTimer = setInterval(() => {
@@ -177,8 +186,11 @@
   });
 
   // ---------- Network download stress ----------
+  // Public large-ish files that support range / repeated fetch.
+  // We use multiple sources and also generate dummy downloads via blob URLs.
   const DOWNLOAD_URLS = [
-    "https://speed.cloudflare.com/__down?bytes=25000000",
+    // Cloudflare / common CDNs often allow CORS or at least partial
+    "https://speed.cloudflare.com/__down?bytes=25000000", // 25 MB
     "https://proof.ovh.net/files/10Mb.dat",
     "https://ash-speed.hetzner.com/100MB.bin",
   ];
@@ -186,9 +198,18 @@
   let downloadAbort = null;
   let downloadBytes = 0;
   let downloadStart = 0;
+  let downloadTimeout = null;
+  // Rolling window for instantaneous-ish speed
+  let speedWindowBytes = 0;
+  let speedWindowStart = 0;
 
   function formatMB(bytes) {
     return (bytes / (1024 * 1024)).toFixed(1);
+  }
+
+  function formatMbPerSec(bytesPerSec) {
+    // Mb/s = megabits per second
+    return ((bytesPerSec * 8) / 1e6).toFixed(1);
   }
 
   async function runDownloadLoop(durationSec) {
@@ -196,14 +217,30 @@
     downloadAbort = new AbortController();
     downloadBytes = 0;
     downloadStart = performance.now();
+    speedWindowBytes = 0;
+    speedWindowStart = downloadStart;
     active.download = true;
     updatePower();
 
     const endAt = durationSec > 0 ? downloadStart + durationSec * 1000 : Infinity;
 
     const updateStatus = () => {
-      const elapsed = ((performance.now() - downloadStart) / 1000).toFixed(0);
-      status.textContent = `Downloading… ${formatMB(downloadBytes)} MB · ${elapsed}s`;
+      const now = performance.now();
+      const elapsedSec = (now - downloadStart) / 1000;
+      const windowSec = (now - speedWindowStart) / 1000;
+
+      // Reset rolling window every ~1.5s for responsive speed
+      if (windowSec >= 1.5) {
+        speedWindowBytes = 0;
+        speedWindowStart = now;
+      }
+
+      const avgBytesPerSec = elapsedSec > 0.05 ? downloadBytes / elapsedSec : 0;
+      const instBytesPerSec = windowSec > 0.05 ? speedWindowBytes / windowSec : avgBytesPerSec;
+      const speed = formatMbPerSec(instBytesPerSec || avgBytesPerSec);
+
+      status.textContent =
+        `Downloading… ${formatMB(downloadBytes)} MB · ${speed} Mb/s · ${elapsedSec.toFixed(0)}s`;
       status.className = "status on";
     };
 
@@ -220,8 +257,9 @@
             cache: "no-store",
             mode: "cors",
           });
-          if (!res.ok && res.status !== 0) continue;
-
+          if (!res.ok && res.status !== 0) {
+            continue;
+          }
           const reader = res.body?.getReader();
           if (reader) {
             while (true) {
@@ -229,22 +267,24 @@
               const { done, value } = await reader.read();
               if (done) break;
               downloadBytes += value.byteLength;
+              speedWindowBytes += value.byteLength;
               updateStatus();
             }
             try { reader.cancel(); } catch (_) {}
           } else {
             const buf = await res.arrayBuffer();
             downloadBytes += buf.byteLength;
+            speedWindowBytes += buf.byteLength;
             updateStatus();
           }
         } catch (err) {
           if (err.name === "AbortError") break;
-          // Fallback: local memory traffic
           const size = 8 * 1024 * 1024;
           const buffer = new ArrayBuffer(size);
           const view = new Uint8Array(buffer);
           for (let i = 0; i < size; i += 4096) view[i] = i & 0xff;
           downloadBytes += size;
+          speedWindowBytes += size;
           updateStatus();
           const blob = new Blob([buffer]);
           const objUrl = URL.createObjectURL(blob);
@@ -258,8 +298,10 @@
     } finally {
       active.download = false;
       updatePower();
-      const elapsed = ((performance.now() - downloadStart) / 1000).toFixed(0);
-      status.textContent = `Stopped — ${formatMB(downloadBytes)} MB in ${elapsed}s`;
+      const elapsedSec = (performance.now() - downloadStart) / 1000;
+      const avgSpeed = elapsedSec > 0 ? formatMbPerSec(downloadBytes / elapsedSec) : "0.0";
+      status.textContent =
+        `Stopped — ${formatMB(downloadBytes)} MB · avg ${avgSpeed} Mb/s · ${elapsedSec.toFixed(0)}s`;
       status.className = "status";
       document.getElementById("downloadToggle").checked = false;
       downloadAbort = null;
@@ -267,7 +309,13 @@
   }
 
   function stopDownload() {
-    if (downloadAbort) downloadAbort.abort();
+    if (downloadAbort) {
+      downloadAbort.abort();
+    }
+    if (downloadTimeout) {
+      clearTimeout(downloadTimeout);
+      downloadTimeout = null;
+    }
   }
 
   document.getElementById("downloadToggle").addEventListener("change", (e) => {
@@ -279,7 +327,7 @@
     }
   });
 
-  // ---------- GPU Fractal (Julia set) with FPS ----------
+  // ---------- GPU Fractal (Julia set) — dynamic load + goal FPS ----------
   const canvas = document.getElementById("fractalCanvas");
   const ctx = canvas.getContext("2d", { alpha: false });
   let gpuAnimId = null;
@@ -288,38 +336,61 @@
   let fps = 0;
   let time = 0;
 
-  const W = 320;
-  const H = 320;
-  canvas.width = W;
-  canvas.height = H;
+  // Dynamic load parameters
+  // loadLevel ~0–100: drives resolution and max iterations
+  let loadLevel = 40;
+  let goalFps = 30;
+  let currentW = 160;
+  let currentH = 160;
+  let maxIter = 32;
+  let imageData = null;
+  let data = null;
 
-  const imageData = ctx.createImageData(W, H);
-  const data = imageData.data;
+  function applyLoadLevel(level) {
+    // level 0–100 maps to resolution and iterations
+    loadLevel = Math.max(5, Math.min(100, level));
+    // Resolution: 80×80 at low load → 360×360 at high
+    const side = Math.round(80 + (loadLevel / 100) * 280);
+    currentW = side;
+    currentH = side;
+    // Iterations: 12 at low → 96 at high
+    maxIter = Math.round(12 + (loadLevel / 100) * 84);
+
+    canvas.width = currentW;
+    canvas.height = currentH;
+    imageData = ctx.createImageData(currentW, currentH);
+    data = imageData.data;
+
+    document.getElementById("loadCounter").textContent =
+      Math.round(loadLevel) + "% (" + currentW + "px · " + maxIter + " iter)";
+  }
 
   function renderFractal(t) {
     const cx = Math.sin(t * 0.7) * 0.6;
     const cy = Math.cos(t * 0.5) * 0.5;
-    const maxIter = 48;
-    const scale = 2.6 / W;
+    const scale = 2.6 / currentW;
+    const W = currentW;
+    const H = currentH;
+    const iters = maxIter;
 
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         let zx = (x - W / 2) * scale;
         let zy = (y - H / 2) * scale;
         let i = 0;
-        while (zx * zx + zy * zy < 4 && i < maxIter) {
+        while (zx * zx + zy * zy < 4 && i < iters) {
           const tmp = zx * zx - zy * zy + cx;
           zy = 2 * zx * zy + cy;
           zx = tmp;
           i++;
         }
         const idx = (y * W + x) * 4;
-        if (i === maxIter) {
+        if (i === iters) {
           data[idx] = 0;
           data[idx + 1] = 0;
           data[idx + 2] = 0;
         } else {
-          const v = i / maxIter;
+          const v = i / iters;
           data[idx] = Math.floor(20 + v * 180);
           data[idx + 1] = Math.floor(40 + Math.sin(v * 12 + t) * 80 + 80);
           data[idx + 2] = Math.floor(120 + v * 135);
@@ -330,16 +401,36 @@
     ctx.putImageData(imageData, 0, 0);
   }
 
+  function adjustLoadTowardGoal() {
+    if (fps <= 0) return;
+    const error = goalFps - fps;
+    // Proportional control: if FPS too high → increase load; too low → decrease
+    // Dead zone of ±2 FPS to avoid oscillation
+    if (Math.abs(error) < 2) return;
+
+    // Step size scales with error magnitude
+    const step = Math.max(1, Math.min(8, Math.abs(error) * 0.6));
+    if (error < 0) {
+      // FPS above goal → harder work
+      applyLoadLevel(loadLevel + step);
+    } else {
+      // FPS below goal → easier work
+      applyLoadLevel(loadLevel - step);
+    }
+  }
+
   function gpuLoop(now) {
     time += 0.016;
     renderFractal(time);
 
     frameCount++;
-    if (now - lastFpsTime >= 1000) {
+    if (now - lastFpsTime >= 500) {
+      // Update FPS every 0.5s for faster load feedback
       fps = Math.round((frameCount * 1000) / (now - lastFpsTime));
       document.getElementById("fpsCounter").textContent = fps;
       frameCount = 0;
       lastFpsTime = now;
+      adjustLoadTowardGoal();
     }
 
     gpuAnimId = requestAnimationFrame(gpuLoop);
@@ -347,6 +438,8 @@
 
   function setGpu(on) {
     if (on) {
+      goalFps = parseInt(document.getElementById("goalFpsSlider").value, 10) || 30;
+      applyLoadLevel(40);
       lastFpsTime = performance.now();
       frameCount = 0;
       time = 0;
@@ -359,8 +452,9 @@
         gpuAnimId = null;
       }
       ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       document.getElementById("fpsCounter").textContent = "0";
+      document.getElementById("loadCounter").textContent = "—";
       active.gpu = false;
       updatePower();
     }
@@ -368,6 +462,13 @@
 
   document.getElementById("gpuToggle").addEventListener("change", (e) => {
     setGpu(e.target.checked);
+  });
+
+  document.getElementById("goalFpsSlider").addEventListener("input", (e) => {
+    const v = parseInt(e.target.value, 10);
+    goalFps = v;
+    document.getElementById("goalFpsValue").textContent = v;
+    document.getElementById("goalFpsLabel").textContent = v;
   });
 
   // ---------- Tone generator ----------
@@ -399,7 +500,7 @@
       gainNode = audioCtx.createGain();
       oscillator.type = "sine";
       oscillator.frequency.value = freq;
-      gainNode.gain.value = vol * 0.5;
+      gainNode.gain.value = vol * 0.5; // keep headroom
       oscillator.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       oscillator.start();
@@ -444,7 +545,13 @@
     }
   });
 
-  // ---------- Cleanup ----------
+  // ---------- Cleanup on page hide ----------
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      // Optional: you can leave stressors running intentionally
+    }
+  });
+
   window.addEventListener("pagehide", () => {
     stopDownload();
     setVibrate(false);
@@ -454,5 +561,6 @@
     setTone(false);
   });
 
+  // Initial power
   updatePower();
 })();
