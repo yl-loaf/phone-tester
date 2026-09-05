@@ -1,3 +1,4 @@
+
 (() => {
   "use strict";
 
@@ -482,9 +483,9 @@
       float dr = 1.0;
       float r = 0.0;
       const float power = 8.0;
-      // Fixed 32 DE iterations — never early-exit (max GPU cost per map)
-      for (int i = 0; i < 32; i++) {
+      for (int i = 0; i < 20; i++) {
         r = length(z);
+        if (r > 4.0) break;
         float theta = acos(clamp(z.z / max(r, 1e-6), -1.0, 1.0));
         float phi = atan(z.y, z.x);
         dr = pow(max(r, 1e-6), power - 1.0) * power * dr + 1.0;
@@ -518,12 +519,12 @@
 
     float softShadow(vec3 ro, vec3 rd) {
       float res = 1.0;
-      float t = 0.015;
-      // Fixed 24 steps — no early break
-      for (int i = 0; i < 24; i++) {
+      float t = 0.02;
+      for (int i = 0; i < 12; i++) {
         float h = map(ro + rd * t);
-        res = min(res, 10.0 * h / t);
-        t += clamp(h, 0.015, 0.15);
+        res = min(res, 8.0 * h / t);
+        t += clamp(h, 0.02, 0.2);
+        if (res < 0.05 || t > 4.0) break;
       }
       return clamp(res, 0.0, 1.0);
     }
@@ -531,59 +532,47 @@
     float ao(vec3 p, vec3 n) {
       float occ = 0.0;
       float sca = 1.0;
-      for (int i = 0; i < 8; i++) {
-        float hr = 0.01 + 0.1 * float(i);
+      for (int i = 0; i < 5; i++) {
+        float hr = 0.01 + 0.12 * float(i);
         float dd = map(p + n * hr);
         occ += (hr - dd) * sca;
-        sca *= 0.9;
+        sca *= 0.85;
       }
-      return clamp(1.0 - 1.8 * occ, 0.0, 1.0);
+      return clamp(1.0 - 2.0 * occ, 0.0, 1.0);
     }
 
     void main() {
       vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / min(u_res.x, u_res.y);
-      // 2x supersample offsets for extra cost
-      vec3 colAcc = vec3(0.0);
-      for (int s = 0; s < 2; s++) {
-        vec2 off = (s == 0) ? vec2(-0.25, 0.25) : vec2(0.25, -0.25);
-        vec2 uvs = uv + off / min(u_res.x, u_res.y);
-        vec3 ro = vec3(0.0, 0.0, 2.85);
-        vec3 rd = normalize(vec3(uvs, -1.3));
+      vec3 ro = vec3(0.0, 0.0, 2.85);
+      vec3 rd = normalize(vec3(uv, -1.3));
 
-        float t = 0.0;
-        float d = 1.0;
-        float minD = 1e9;
-        // Always run full step budget (no hit early-out)
-        for (int i = 0; i < 512; i++) {
-          if (float(i) >= u_steps) break;
-          vec3 p = ro + rd * t;
-          d = map(p);
-          minD = min(minD, d);
-          t += max(d * 0.7, 0.002);
-          if (t > 16.0) t = 16.0;
-        }
-
-        vec3 col = vec3(0.012, 0.012, 0.035);
-        if (minD < 0.02) {
-          vec3 p = ro + rd * min(t, 16.0);
-          // Approximate surface position
-          for (int k = 0; k < 4; k++) {
-            p -= rd * map(p) * 0.5;
-          }
-          vec3 n = calcNormal(p);
-          vec3 light = normalize(vec3(0.5, 0.9, 0.3));
-          float diff = max(dot(n, light), 0.0);
-          float sh = softShadow(p + n * 0.008, light);
-          float occ = ao(p, n);
-          float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
-          vec3 base = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + length(p) * 2.4 + u_time);
-          col = base * (0.1 + 0.9 * diff * sh) * occ + fre * 0.5;
-        } else {
-          col += 0.06 * vec3(0.12, 0.22, 0.5) * (1.0 - length(uvs));
-        }
-        colAcc += col;
+      float t = 0.0;
+      float d = 1.0;
+      int hit = 0;
+      for (int i = 0; i < 400; i++) {
+        if (float(i) >= u_steps) break;
+        vec3 p = ro + rd * t;
+        d = map(p);
+        if (d < 0.002) { hit = 1; break; }
+        t += d * 0.8;
+        if (t > 14.0) break;
       }
-      gl_FragColor = vec4(colAcc * 0.5, 1.0);
+
+      vec3 col = vec3(0.012, 0.012, 0.035);
+      if (hit == 1) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 light = normalize(vec3(0.5, 0.9, 0.3));
+        float diff = max(dot(n, light), 0.0);
+        float sh = softShadow(p + n * 0.008, light);
+        float occ = ao(p, n);
+        float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+        vec3 base = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + length(p) * 2.4 + u_time);
+        col = base * (0.1 + 0.9 * diff * sh) * occ + fre * 0.5;
+      } else {
+        col += 0.06 * vec3(0.12, 0.22, 0.5) * (1.0 - length(uv));
+      }
+      gl_FragColor = vec4(col, 1.0);
     }
   `;
 
@@ -599,45 +588,51 @@
   }
 
   function applyWebglLoad(level) {
-    webglLoad = Math.max(20, Math.min(100, level));
-    // scale: 1.0 → 3.0 of CSS size × DPR (huge pixel count)
-    webglScale = 1.0 + (webglLoad / 100) * 2.0;
-    // ray steps: 120 → 480
-    webglSteps = Math.round(120 + (webglLoad / 100) * 360);
-    // full-screen passes: 2 → 8
-    webglPasses = Math.max(2, Math.round(2 + (webglLoad / 100) * 6));
+    webglLoad = Math.max(5, Math.min(100, level));
+    // scale: 0.45 → 2.0 — low end light enough for ~60 FPS on most phones
+    webglScale = 0.45 + (webglLoad / 100) * 1.55;
+    // ray steps: 40 → 320
+    webglSteps = Math.round(40 + (webglLoad / 100) * 280);
+    // passes: 1 → 5
+    webglPasses = Math.max(1, Math.round(1 + (webglLoad / 100) * 4));
 
     if (!gl) return;
 
-    const cssW = Math.min(window.innerWidth - 28, 520);
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    const w = Math.min(2048, Math.round(cssW * dpr * webglScale));
-    const h = Math.min(2048, Math.round(cssW * dpr * webglScale));
-    canvas.width = w;
-    canvas.height = h;
-    canvas.style.width = cssW + "px";
-    canvas.style.height = cssW + "px";
-    gl.viewport(0, 0, w, h);
-    if (glResLoc) gl.uniform2f(glResLoc, w, h);
+    const cssW = Math.min(window.innerWidth - 28, 480);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const w = Math.min(1280, Math.round(cssW * dpr * webglScale));
+    const h = Math.min(1280, Math.round(cssW * dpr * webglScale));
+    if (Math.abs(canvas.width - w) > 4 || Math.abs(canvas.height - h) > 4) {
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = cssW + "px";
+      canvas.style.height = cssW + "px";
+      gl.viewport(0, 0, w, h);
+      if (glResLoc) gl.uniform2f(glResLoc, w, h);
+    }
     if (glStepsLoc) gl.uniform1f(glStepsLoc, webglSteps);
 
     document.getElementById("loadCounter").textContent =
-      Math.round(webglLoad) + "% (" + w + "px · " + webglSteps + " steps · ×" + webglPasses + ")";
+      Math.round(webglLoad) + "% (" + canvas.width + "px · " + webglSteps + " steps · ×" + webglPasses + ")";
+  }
+
+  function startLoadForGoal(g) {
+    if (g >= 50) return 15;
+    if (g >= 35) return 30;
+    if (g >= 20) return 50;
+    if (g >= 10) return 70;
+    return 90;
   }
 
   function adjustWebglTowardGoal() {
     if (fps <= 0) return;
     const error = goalFps - fps;
-    if (Math.abs(error) < 1) return;
-    // Prefer ramping UP hard when above goal FPS
-    if (error < 0) {
-      const step = Math.max(4, Math.min(20, Math.abs(error) * 2));
-      applyWebglLoad(webglLoad + step);
-    } else {
-      // Drop load slowly so it stays heavy
-      const step = Math.max(1, Math.min(6, Math.abs(error) * 0.5));
-      applyWebglLoad(webglLoad - step);
-    }
+    // ±3 FPS dead zone
+    if (Math.abs(error) < 3) return;
+    // Symmetric control — reduce load as aggressively as increase
+    const step = Math.max(3, Math.min(12, Math.abs(error) * 0.8));
+    if (error < 0) applyWebglLoad(webglLoad + step); // too fast → heavier
+    else applyWebglLoad(webglLoad - step);           // too slow → lighter
   }
 
   function initWebGL() {
@@ -679,8 +674,7 @@
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    // Start near max — adaptive will only ease off if FPS is below goal
-    applyWebglLoad(goalFps <= 15 ? 100 : goalFps <= 30 ? 85 : 65);
+    applyWebglLoad(startLoadForGoal(goalFps));
     return true;
   }
 
@@ -773,6 +767,16 @@
     goalFps = v;
     document.getElementById("goalFpsValue").textContent = v;
     document.getElementById("goalFpsLabel").textContent = v;
+    // Immediately bias load toward a sensible level for the new goal
+    if (active.gpu && gpuMode === "webgl") {
+      const target = startLoadForGoal(v);
+      // Blend current load toward target so slider feels responsive
+      applyWebglLoad(webglLoad * 0.4 + target * 0.6);
+    } else if (active.gpu && gpuMode === "canvas") {
+      // Nudge canvas load similarly
+      const target = v >= 50 ? 25 : v >= 30 ? 45 : v >= 15 ? 65 : 85;
+      applyLoadLevel(loadLevel * 0.4 + target * 0.6);
+    }
   });
 
   document.getElementById("gpuMode").addEventListener("change", () => {
@@ -885,7 +889,7 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "6";
+  const BUILD_ID = "7";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
