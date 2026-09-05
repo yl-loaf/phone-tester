@@ -6,14 +6,19 @@
   <meta name="theme-color" content="#0a0a0f" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- Discourage aggressive caching so GitHub Pages updates show up -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Phone Stress Tester</title>
-  <link rel="stylesheet" href="styles.css" />
+  <!-- Bump ?v= when you deploy so browsers fetch fresh assets -->
+  <link rel="stylesheet" href="styles.css?v=3" />
 </head>
 <body>
   <div class="app">
     <header>
       <h1>Phone Stress Tester</h1>
-      <p class="subtitle">Battery &amp; hardware stress tools</p>
+      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v3</span></p>
     </header>
 
     <section class="card power-card">
@@ -138,6 +143,6 @@
     </footer>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
