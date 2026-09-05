@@ -358,21 +358,16 @@
   let imageData = null;
   let data = null;
 
-  // WebGL state
+  // WebGL state — adaptive load toward goal FPS
   let glProgram = null;
   let glTimeLoc = null;
   let glResLoc = null;
-  let glQualityLoc = null;
-  let webglQuality = 2;
+  let glStepsLoc = null;
   let glBuf = null;
-
-  // Quality → resolution scale + ray steps (higher = more lag)
-  const WEBGL_QUALITY = {
-    1: { scale: 0.5, steps: 48, label: "Light" },
-    2: { scale: 0.75, steps: 80, label: "Standard" },
-    3: { scale: 1.0, steps: 120, label: "Heavy" },
-    4: { scale: 1.25, steps: 180, label: "Full lag" },
-  };
+  let webglLoad = 70; // 0–100, drives resolution scale + ray steps + passes
+  let webglSteps = 160;
+  let webglScale = 1.2;
+  let webglPasses = 2; // extra full-screen draws per frame to saturate GPU
 
   function resetCanvasElement() {
     // Replace canvas so we can switch between 2d and webgl contexts cleanly
@@ -449,7 +444,7 @@
     else applyLoadLevel(loadLevel - step);
   }
 
-  // ---- WebGL volume raymarch (Mandelbulb-style) — system-wide GPU load ----
+  // ---- WebGL volume raymarch — heavy GPU load, adaptive to goal FPS ----
   const VERT_SRC = `
     attribute vec2 a_pos;
     void main() {
@@ -457,87 +452,113 @@
     }
   `;
 
-  // Heavy fragment shader: sphere-traced Mandelbulb / twisted volume
-  function buildFragSrc(maxSteps) {
-    return `
-      precision highp float;
-      uniform float u_time;
-      uniform vec2 u_res;
-      uniform float u_steps;
+  // Very heavy fragment: high-iter Mandelbulb DE + soft shadow + AO
+  const FRAG_SRC = `
+    precision highp float;
+    uniform float u_time;
+    uniform vec2 u_res;
+    uniform float u_steps;
 
-      // Mandelbulb-like distance estimator
-      float mandelbulb(vec3 pos) {
-        vec3 z = pos;
-        float dr = 1.0;
-        float r = 0.0;
-        const float power = 8.0;
-        for (int i = 0; i < 12; i++) {
-          r = length(z);
-          if (r > 2.0) break;
-          float theta = acos(clamp(z.z / r, -1.0, 1.0));
-          float phi = atan(z.y, z.x);
-          dr = pow(r, power - 1.0) * power * dr + 1.0;
-          float zr = pow(r, power);
-          theta *= power;
-          phi *= power;
-          z = zr * vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
-          z += pos;
-        }
-        return 0.5 * log(r) * r / dr;
+    float mandelbulb(vec3 pos) {
+      vec3 z = pos;
+      float dr = 1.0;
+      float r = 0.0;
+      const float power = 8.0;
+      // 24 DE iterations — expensive trig per step
+      for (int i = 0; i < 24; i++) {
+        r = length(z);
+        if (r > 2.0) break;
+        float theta = acos(clamp(z.z / r, -1.0, 1.0));
+        float phi = atan(z.y, z.x);
+        dr = pow(r, power - 1.0) * power * dr + 1.0;
+        float zr = pow(r, power);
+        theta *= power;
+        phi *= power;
+        z = zr * vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+        z += pos;
+      }
+      return 0.5 * log(r) * r / max(dr, 1e-6);
+    }
+
+    float map(vec3 p) {
+      float a = u_time * 0.3;
+      float c = cos(a), s = sin(a);
+      p.xz = mat2(c, -s, s, c) * p.xz;
+      float b = u_time * 0.17;
+      float cb = cos(b), sb = sin(b);
+      p.xy = mat2(cb, -sb, sb, cb) * p.xy;
+      return mandelbulb(p);
+    }
+
+    vec3 calcNormal(vec3 p) {
+      const float e = 0.0008;
+      return normalize(vec3(
+        map(p + vec3(e, 0.0, 0.0)) - map(p - vec3(e, 0.0, 0.0)),
+        map(p + vec3(0.0, e, 0.0)) - map(p - vec3(0.0, e, 0.0)),
+        map(p + vec3(0.0, 0.0, e)) - map(p - vec3(0.0, 0.0, e))
+      ));
+    }
+
+    // Soft shadow = more map() calls
+    float softShadow(vec3 ro, vec3 rd) {
+      float res = 1.0;
+      float t = 0.02;
+      for (int i = 0; i < 16; i++) {
+        float h = map(ro + rd * t);
+        res = min(res, 8.0 * h / t);
+        t += clamp(h, 0.02, 0.2);
+        if (res < 0.01 || t > 4.0) break;
+      }
+      return clamp(res, 0.0, 1.0);
+    }
+
+    float ao(vec3 p, vec3 n) {
+      float occ = 0.0;
+      float sca = 1.0;
+      for (int i = 0; i < 5; i++) {
+        float hr = 0.01 + 0.12 * float(i);
+        float dd = map(p + n * hr);
+        occ += (hr - dd) * sca;
+        sca *= 0.85;
+      }
+      return clamp(1.0 - 2.0 * occ, 0.0, 1.0);
+    }
+
+    void main() {
+      vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / min(u_res.x, u_res.y);
+      vec3 ro = vec3(0.0, 0.0, 3.0);
+      vec3 rd = normalize(vec3(uv, -1.35));
+
+      float t = 0.0;
+      float d;
+      int hit = 0;
+      // Hard upper bound 400; runtime steps from uniform
+      for (int i = 0; i < 400; i++) {
+        if (float(i) >= u_steps) break;
+        vec3 p = ro + rd * t;
+        d = map(p);
+        if (d < 0.0015) { hit = 1; break; }
+        t += d * 0.85;
+        if (t > 14.0) break;
       }
 
-      float map(vec3 p) {
-        // Slow rotation for visual interest
-        float a = u_time * 0.25;
-        float c = cos(a), s = sin(a);
-        p.xz = mat2(c, -s, s, c) * p.xz;
-        return mandelbulb(p);
+      vec3 col = vec3(0.015, 0.015, 0.04);
+      if (hit == 1) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 light = normalize(vec3(0.55, 0.85, 0.35));
+        float diff = max(dot(n, light), 0.0);
+        float sh = softShadow(p + n * 0.01, light);
+        float occ = ao(p, n);
+        float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+        vec3 base = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + length(p) * 2.2 + u_time);
+        col = base * (0.12 + 0.88 * diff * sh) * occ + fre * 0.45;
+      } else {
+        col += 0.05 * vec3(0.15, 0.25, 0.55) * (1.0 - length(uv));
       }
-
-      vec3 calcNormal(vec3 p) {
-        const float e = 0.001;
-        return normalize(vec3(
-          map(p + vec3(e, 0.0, 0.0)) - map(p - vec3(e, 0.0, 0.0)),
-          map(p + vec3(0.0, e, 0.0)) - map(p - vec3(0.0, e, 0.0)),
-          map(p + vec3(0.0, 0.0, e)) - map(p - vec3(0.0, 0.0, e))
-        ));
-      }
-
-      void main() {
-        vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / min(u_res.x, u_res.y);
-        vec3 ro = vec3(0.0, 0.0, 3.2);
-        vec3 rd = normalize(vec3(uv, -1.4));
-
-        float t = 0.0;
-        float d;
-        int hit = 0;
-        // Unrolled-friendly loop bound; actual steps driven by uniform via early exit
-        for (int i = 0; i < 200; i++) {
-          if (float(i) >= u_steps) break;
-          vec3 p = ro + rd * t;
-          d = map(p);
-          if (d < 0.002) { hit = 1; break; }
-          t += d;
-          if (t > 12.0) break;
-        }
-
-        vec3 col = vec3(0.02, 0.02, 0.05);
-        if (hit == 1) {
-          vec3 p = ro + rd * t;
-          vec3 n = calcNormal(p);
-          vec3 light = normalize(vec3(0.6, 0.8, 0.4));
-          float diff = max(dot(n, light), 0.0);
-          float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
-          vec3 base = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + length(p) * 2.0 + u_time);
-          col = base * (0.15 + 0.85 * diff) + fre * 0.4;
-        } else {
-          // Background glow so work still looks intentional
-          col += 0.04 * vec3(0.2, 0.3, 0.6) * (1.0 - length(uv));
-        }
-        gl_FragColor = vec4(col, 1.0);
-      }
-    `;
-  }
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
 
   function compileShader(type, src) {
     const s = gl.createShader(type);
@@ -550,6 +571,43 @@
     return s;
   }
 
+  function applyWebglLoad(level) {
+    webglLoad = Math.max(10, Math.min(100, level));
+    // scale: 0.7 → 2.0 (pixel count grows fast)
+    webglScale = 0.7 + (webglLoad / 100) * 1.3;
+    // ray steps: 64 → 320
+    webglSteps = Math.round(64 + (webglLoad / 100) * 256);
+    // extra full-screen passes: 1 → 4
+    webglPasses = Math.max(1, Math.round(1 + (webglLoad / 100) * 3));
+
+    if (!gl) return;
+
+    const cssW = Math.min(window.innerWidth - 28, 480);
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const w = Math.round(cssW * dpr * webglScale);
+    const h = Math.round(cssW * dpr * webglScale);
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssW + "px";
+    gl.viewport(0, 0, w, h);
+    if (glResLoc) gl.uniform2f(glResLoc, w, h);
+    if (glStepsLoc) gl.uniform1f(glStepsLoc, webglSteps);
+
+    document.getElementById("loadCounter").textContent =
+      Math.round(webglLoad) + "% (" + w + "px · " + webglSteps + " steps · ×" + webglPasses + ")";
+  }
+
+  function adjustWebglTowardGoal() {
+    if (fps <= 0) return;
+    const error = goalFps - fps;
+    // Tighter dead zone for low goal FPS
+    if (Math.abs(error) < 1.5) return;
+    const step = Math.max(2, Math.min(12, Math.abs(error) * 1.2));
+    if (error < 0) applyWebglLoad(webglLoad + step); // too fast → heavier
+    else applyWebglLoad(webglLoad - step);
+  }
+
   function initWebGL() {
     resetCanvasElement();
     gl = canvas.getContext("webgl", {
@@ -558,22 +616,12 @@
       depth: false,
       stencil: false,
       powerPreference: "high-performance",
+      preserveDrawingBuffer: false,
     }) || canvas.getContext("experimental-webgl");
     if (!gl) return false;
 
-    const q = WEBGL_QUALITY[webglQuality] || WEBGL_QUALITY[2];
-    // Size canvas large so fragment work fills the GPU
-    const cssW = Math.min(window.innerWidth - 28, 480);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.round(cssW * dpr * q.scale);
-    const h = Math.round(cssW * dpr * q.scale);
-    canvas.width = w;
-    canvas.height = h;
-    canvas.style.width = cssW + "px";
-    canvas.style.height = cssW + "px";
-
     const vs = compileShader(gl.VERTEX_SHADER, VERT_SRC);
-    const fs = compileShader(gl.FRAGMENT_SHADER, buildFragSrc(q.steps));
+    const fs = compileShader(gl.FRAGMENT_SHADER, FRAG_SRC);
     if (!vs || !fs) return false;
 
     glProgram = gl.createProgram();
@@ -588,7 +636,7 @@
 
     glTimeLoc = gl.getUniformLocation(glProgram, "u_time");
     glResLoc = gl.getUniformLocation(glProgram, "u_res");
-    glQualityLoc = gl.getUniformLocation(glProgram, "u_steps");
+    glStepsLoc = gl.getUniformLocation(glProgram, "u_steps");
 
     const posLoc = gl.getAttribLocation(glProgram, "a_pos");
     glBuf = gl.createBuffer();
@@ -599,38 +647,19 @@
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    gl.viewport(0, 0, w, h);
-    gl.uniform2f(glResLoc, w, h);
-    gl.uniform1f(glQualityLoc, q.steps);
-
-    document.getElementById("loadCounter").textContent =
-      q.label + " (" + w + "px · " + q.steps + " steps)";
+    // Start aggressive so low goal FPS is reachable
+    applyWebglLoad(goalFps <= 10 ? 90 : goalFps <= 20 ? 75 : 55);
     return true;
   }
 
   function renderWebGL(t) {
     if (!gl || !glProgram) return;
     gl.uniform1f(glTimeLoc, t);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-  }
-
-  function resizeWebGL() {
-    if (!gl || gpuMode !== "webgl") return;
-    const q = WEBGL_QUALITY[webglQuality] || WEBGL_QUALITY[2];
-    const cssW = Math.min(window.innerWidth - 28, 480);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.round(cssW * dpr * q.scale);
-    const h = Math.round(cssW * dpr * q.scale);
-    if (canvas.width === w && canvas.height === h) return;
-    canvas.width = w;
-    canvas.height = h;
-    canvas.style.width = cssW + "px";
-    canvas.style.height = cssW + "px";
-    gl.viewport(0, 0, w, h);
-    gl.uniform2f(glResLoc, w, h);
-    gl.uniform1f(glQualityLoc, q.steps);
-    document.getElementById("loadCounter").textContent =
-      q.label + " (" + w + "px · " + q.steps + " steps)";
+    // Multiple passes = more GPU time per displayed frame
+    for (let i = 0; i < webglPasses; i++) {
+      gl.uniform1f(glTimeLoc, t + i * 0.01);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
   }
 
   function gpuLoop(now) {
@@ -648,6 +677,7 @@
       frameCount = 0;
       lastFpsTime = now;
       if (gpuMode === "canvas") adjustLoadTowardGoal();
+      else adjustWebglTowardGoal();
     }
 
     gpuAnimId = requestAnimationFrame(gpuLoop);
@@ -655,20 +685,16 @@
 
   function updateModeUI() {
     const mode = document.getElementById("gpuMode").value;
-    const isWebgl = mode === "webgl";
-    document.getElementById("goalFpsControl").style.display = isWebgl ? "none" : "";
-    document.getElementById("webglQualityControl").style.display = isWebgl ? "" : "none";
-    document.getElementById("goalFpsLabel").textContent = isWebgl ? "—" : String(goalFps);
-    document.getElementById("gpuHint").textContent = isWebgl
-      ? "WebGL volume raymarch (Mandelbulb). Quality 4 can lag the whole device — close the tab to stop."
+    document.getElementById("goalFpsLabel").textContent = String(goalFps);
+    document.getElementById("gpuHint").textContent = mode === "webgl"
+      ? "WebGL volume raymarch. Load auto-scales to goal FPS — lower goal = harder lag. Close tab to stop."
       : "Canvas Julia set. Load auto-adjusts toward goal FPS.";
   }
 
   function setGpu(on) {
     if (on) {
       gpuMode = document.getElementById("gpuMode").value || "canvas";
-      webglQuality = parseInt(document.getElementById("webglQualitySlider").value, 10) || 2;
-      goalFps = parseInt(document.getElementById("goalFpsSlider").value, 10) || 30;
+      goalFps = parseInt(document.getElementById("goalFpsSlider").value, 10) || 15;
       updateModeUI();
 
       if (gpuMode === "webgl") {
@@ -719,27 +745,17 @@
 
   document.getElementById("gpuMode").addEventListener("change", () => {
     updateModeUI();
-    // Restart if already running so mode switch takes effect
     if (document.getElementById("gpuToggle").checked) {
       setGpu(false);
       setGpu(true);
     }
   });
 
-  document.getElementById("webglQualitySlider").addEventListener("input", (e) => {
-    webglQuality = parseInt(e.target.value, 10);
-    document.getElementById("webglQualityValue").textContent = webglQuality;
-    if (gpuMode === "webgl" && active.gpu) {
-      // Re-init to apply new resolution / step count
-      setGpu(false);
-      setGpu(true);
-    }
-  });
-
   window.addEventListener("resize", () => {
-    if (active.gpu && gpuMode === "webgl") resizeWebGL();
+    if (active.gpu && gpuMode === "webgl") applyWebglLoad(webglLoad);
   });
 
+  goalFps = 15;
   updateModeUI();
 
   // ---------- Tone generator ----------
@@ -837,7 +853,7 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "4";
+  const BUILD_ID = "5";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
