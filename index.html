@@ -12,13 +12,13 @@
   <meta http-equiv="Expires" content="0" />
   <title>Phone Stress Tester</title>
   <!-- Bump ?v= when you deploy so browsers fetch fresh assets -->
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body>
   <div class="app">
     <header>
       <h1>Phone Stress Tester</h1>
-      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v4</span></p>
+      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v5</span></p>
     </header>
 
     <section class="card power-card">
@@ -104,27 +104,22 @@
         <label>
           Mode
           <select id="gpuMode">
-            <option value="canvas">Canvas Julia (adaptive)</option>
-            <option value="webgl">WebGL Volume / Lag (like volumeshaderbm)</option>
+            <option value="canvas">Canvas Julia</option>
+            <option value="webgl">WebGL Volume (device lag)</option>
           </select>
         </label>
         <label id="goalFpsControl">
-          Goal FPS <span id="goalFpsValue">30</span>
-          <input type="range" id="goalFpsSlider" min="5" max="60" value="30" step="1" />
-        </label>
-        <label id="webglQualityControl" style="display:none">
-          Quality / intensity <span id="webglQualityValue">2</span>
-          <input type="range" id="webglQualitySlider" min="1" max="4" value="2" step="1" />
-          <span class="hint-inline">1=light · 4=full device lag</span>
+          Goal FPS <span id="goalFpsValue">15</span>
+          <input type="range" id="goalFpsSlider" min="1" max="60" value="15" step="1" />
         </label>
       </div>
       <canvas id="fractalCanvas" width="400" height="400"></canvas>
       <p class="status">
         FPS: <span id="fpsCounter">0</span>
         · Load: <span id="loadCounter">—</span>
-        · Goal: <span id="goalFpsLabel">30</span>
+        · Goal: <span id="goalFpsLabel">15</span>
       </p>
-      <p class="hint" id="gpuHint">Canvas: animated Julia, load auto-adjusts. WebGL: heavy raymarch volume shader — can lag the whole phone.</p>
+      <p class="hint" id="gpuHint">Both modes auto-scale load to hit goal FPS. WebGL volume raymarch can lag the whole device — lower goal = heavier stress.</p>
     </section>
 
     <!-- Audio tone -->
@@ -155,6 +150,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
