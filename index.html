@@ -12,7 +12,7 @@
   <meta http-equiv="Expires" content="0" />
   <title>Phone Stress Tester</title>
   <!-- Bump ?v= when you deploy so browsers fetch fresh assets -->
-  <link rel="stylesheet" href="styles.css?v=11" />
+  <link rel="stylesheet" href="styles.css?v=12" />
 </head>
 <body>
   <div class="app">
@@ -21,7 +21,7 @@
         <h1>Phone Stress Tester</h1>
         <button type="button" id="themeToggle" class="theme-btn" aria-label="Toggle light mode">Light</button>
       </div>
-      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v11</span></p>
+      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v12</span></p>
     </header>
 
     <section class="card power-card">
@@ -158,6 +158,31 @@
       <p class="hint" id="gpuHint">Both modes auto-scale load to hit goal FPS. WebGL volume raymarch can lag the whole device — lower goal = heavier stress.</p>
     </section>
 
+    <!-- Microphone -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Microphone</h2>
+        <label class="switch">
+          <input type="checkbox" id="micToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="mic-meters">
+        <div class="mic-meter">
+          <span class="mic-label">Amplitude</span>
+          <div class="mic-bar-wrap"><div id="micAmpBar" class="mic-bar"></div></div>
+          <span id="micAmpValue" class="mic-readout">0%</span>
+        </div>
+        <div class="mic-meter">
+          <span class="mic-label">Peak frequency</span>
+          <div class="mic-bar-wrap"><div id="micFreqBar" class="mic-bar mic-bar-freq"></div></div>
+          <span id="micFreqValue" class="mic-readout">— Hz</span>
+        </div>
+      </div>
+      <p class="status" id="micStatus">Off</p>
+      <p class="hint">Live mic level (RMS) and dominant frequency from FFT. Grant microphone permission when asked.</p>
+    </section>
+
     <!-- Audio tone -->
     <section class="card">
       <div class="card-header">
@@ -186,6 +211,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>
