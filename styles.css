@@ -301,6 +301,52 @@ select {
   padding-right: 36px;
 }
 
+/* Microphone meters */
+.mic-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 10px 0 4px;
+}
+
+.mic-meter {
+  display: grid;
+  grid-template-columns: 100px 1fr 64px;
+  align-items: center;
+  gap: 8px;
+}
+
+.mic-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.mic-bar-wrap {
+  height: 10px;
+  background: var(--switch-off);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.mic-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 5px;
+  transition: width 0.08s linear;
+}
+
+.mic-bar-freq {
+  background: var(--success);
+}
+
+.mic-readout {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text);
+}
+
 footer {
   text-align: center;
   margin-top: 24px;
