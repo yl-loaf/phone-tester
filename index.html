@@ -12,13 +12,16 @@
   <meta http-equiv="Expires" content="0" />
   <title>Phone Stress Tester</title>
   <!-- Bump ?v= when you deploy so browsers fetch fresh assets -->
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 <body>
   <div class="app">
     <header>
-      <h1>Phone Stress Tester</h1>
-      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v8</span></p>
+      <div class="header-row">
+        <h1>Phone Stress Tester</h1>
+        <button type="button" id="themeToggle" class="theme-btn" aria-label="Toggle light mode">Light</button>
+      </div>
+      <p class="subtitle">Battery &amp; hardware stress tools <span id="buildTag" class="build-tag">v9</span></p>
     </header>
 
     <section class="card power-card">
@@ -70,6 +73,19 @@
       </div>
       <p class="status" id="vibrateStatus">Off</p>
       <p class="hint">Works on Android Chrome/Firefox. Not supported on iOS Safari — Apple does not expose the Vibration API to websites.</p>
+    </section>
+
+    <!-- Location -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Location ping</h2>
+        <label class="switch">
+          <input type="checkbox" id="locationToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <p class="status" id="locationStatus">Off</p>
+      <p class="hint">Keeps requesting GPS (high accuracy) as often as the browser allows until turned off. Uses radio + GNSS.</p>
     </section>
 
     <!-- Network stress -->
@@ -151,6 +167,6 @@
     </footer>
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>
