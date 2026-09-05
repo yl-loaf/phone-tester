@@ -244,11 +244,14 @@
     setVibrate(e.target.checked);
   });
 
-  // ---------- Location ping (continuous high-accuracy) ----------
+  // ---------- Location ping (continuous, resilient to timeouts) ----------
   let locationWatchId = null;
   let locationPingTimer = null;
   let locationCount = 0;
   let locationLast = null;
+  let locationPending = false;
+  let locationTimeouts = 0;
+  let locationHighAccuracy = true;
 
   function formatLoc(pos) {
     const c = pos.coords;
@@ -259,29 +262,84 @@
     );
   }
 
+  function showLocationOk(pos) {
+    const status = document.getElementById("locationStatus");
+    if (!active.location) return;
+    locationCount++;
+    locationLast = pos;
+    locationTimeouts = 0;
+    status.textContent = "Ping #" + locationCount + " — " + formatLoc(pos);
+    status.className = "status on";
+  }
+
+  function showLocationWait(msg) {
+    const status = document.getElementById("locationStatus");
+    if (!active.location) return;
+    // Keep last good fix visible when possible
+    const tail = locationLast ? " · last: " + formatLoc(locationLast) : "";
+    status.textContent = msg + tail;
+    status.className = "status warn";
+  }
+
+  function geoOpts(high, timeoutMs) {
+    return {
+      enableHighAccuracy: high,
+      maximumAge: high ? 2000 : 10000, // allow slight cache to reduce timeouts
+      timeout: timeoutMs,
+    };
+  }
+
   function requestOneLocation() {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation || !active.location) return;
+    // Avoid stacking requests while one is still pending
+    if (locationPending) return;
+    locationPending = true;
+
+    const tryHigh = locationHighAccuracy;
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        locationCount++;
-        locationLast = pos;
-        const status = document.getElementById("locationStatus");
-        if (!active.location) return;
-        status.textContent =
-          "Ping #" + locationCount + " — " + formatLoc(pos);
-        status.className = "status on";
+        locationPending = false;
+        locationHighAccuracy = true; // recover high accuracy after success
+        showLocationOk(pos);
       },
       (err) => {
-        const status = document.getElementById("locationStatus");
+        locationPending = false;
         if (!active.location) return;
-        status.textContent = "Error: " + (err.message || "code " + err.code);
-        status.className = "status warn";
+
+        // 1 = permission denied, 2 = position unavailable, 3 = timeout
+        if (err.code === 1) {
+          showLocationWait("Permission denied — enable location for this site");
+          return;
+        }
+
+        if (err.code === 3 || (err.message || "").toLowerCase().includes("timeout")) {
+          locationTimeouts++;
+          // After a few high-accuracy timeouts, fall back to network/coarse
+          if (tryHigh && locationTimeouts >= 2) {
+            locationHighAccuracy = false;
+            showLocationWait("GPS slow — trying network location…");
+            // Immediate coarse retry
+            locationPending = true;
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                locationPending = false;
+                showLocationOk(pos);
+              },
+              () => {
+                locationPending = false;
+                showLocationWait("Waiting for fix (timeout) — still pinging…");
+              },
+              geoOpts(false, 30000)
+            );
+            return;
+          }
+          showLocationWait("Waiting for GPS fix…");
+          return;
+        }
+
+        showLocationWait("Unavailable — retrying…");
       },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 15000,
-      }
+      geoOpts(tryHigh, tryHigh ? 45000 : 30000)
     );
   }
 
@@ -295,40 +353,44 @@
         return;
       }
       locationCount = 0;
+      locationTimeouts = 0;
+      locationPending = false;
+      locationHighAccuracy = true;
       active.location = true;
       updatePower();
-      status.textContent = "Requesting location…";
+      status.textContent = "Requesting location (high accuracy)…";
       status.className = "status on";
 
-      // watchPosition for continuous updates
       try {
         locationWatchId = navigator.geolocation.watchPosition(
           (pos) => {
-            locationCount++;
-            locationLast = pos;
-            if (!active.location) return;
-            status.textContent =
-              "Ping #" + locationCount + " — " + formatLoc(pos);
-            status.className = "status on";
+            showLocationOk(pos);
           },
           (err) => {
             if (!active.location) return;
-            status.textContent = "Watch: " + (err.message || "code " + err.code);
-            status.className = "status warn";
+            // Don't surface every watch timeout as a hard error
+            if (err.code === 3) {
+              showLocationWait("Watch waiting for GPS…");
+            } else if (err.code === 1) {
+              showLocationWait("Permission denied — enable location for this site");
+            } else {
+              showLocationWait("Watch: retrying…");
+            }
           },
           {
             enableHighAccuracy: true,
-            maximumAge: 0,
-            timeout: 20000,
+            maximumAge: 5000,
+            timeout: 60000,
           }
         );
       } catch (_) {}
 
-      // Also force getCurrentPosition on a short interval (some browsers throttle watch)
       requestOneLocation();
-      locationPingTimer = setInterval(requestOneLocation, 3000);
+      // 5s interval — less overlap with long GPS timeouts
+      locationPingTimer = setInterval(requestOneLocation, 5000);
     } else {
       active.location = false;
+      locationPending = false;
       if (locationWatchId != null && navigator.geolocation) {
         try {
           navigator.geolocation.clearWatch(locationWatchId);
@@ -1075,7 +1137,7 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "9";
+  const BUILD_ID = "10";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
