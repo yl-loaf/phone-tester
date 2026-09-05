@@ -9,6 +9,26 @@
   --danger: #ff5b5b;
   --success: #4ade80;
   --radius: 14px;
+  --power-grad-a: #16162a;
+  --power-grad-b: #12121c;
+  --input-bg: #0e0e16;
+  --switch-off: #2a2a3a;
+}
+
+html.light {
+  --bg: #f2f3f7;
+  --card: #ffffff;
+  --border: #d8dbe3;
+  --text: #1a1b22;
+  --muted: #6b7080;
+  --accent: #3b6ef5;
+  --accent-dim: #2a52c4;
+  --danger: #e03e3e;
+  --success: #1a9e4a;
+  --power-grad-a: #eef1ff;
+  --power-grad-b: #f7f8fc;
+  --input-bg: #f0f2f7;
+  --switch-off: #c5c9d4;
 }
 
 * {
@@ -41,10 +61,33 @@ header {
   padding-top: 8px;
 }
 
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 header h1 {
   font-size: 1.45rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+}
+
+.theme-btn {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.theme-btn:active {
+  opacity: 0.85;
 }
 
 .subtitle {
@@ -104,7 +147,7 @@ header h1 {
 /* Power */
 .power-card {
   text-align: center;
-  background: linear-gradient(145deg, #16162a, #12121c);
+  background: linear-gradient(145deg, var(--power-grad-a), var(--power-grad-b));
 }
 
 .power-display {
@@ -141,7 +184,7 @@ header h1 {
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background: #2a2a3a;
+  background: var(--switch-off);
   border-radius: 30px;
   transition: 0.2s;
 }
@@ -224,7 +267,7 @@ input[type="range"] {
 
 input[type="range"]::-webkit-slider-runnable-track {
   height: 6px;
-  background: #2a2a3a;
+  background: var(--switch-off);
   border-radius: 3px;
 }
 
@@ -244,7 +287,7 @@ select {
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: #0e0e16;
+  background: var(--input-bg);
   color: var(--text);
   font-size: 1rem;
 }
