@@ -82,7 +82,7 @@
           <span class="hint-inline">0 = infinite</span>
         </label>
       </div>
-      <p class="status" id="downloadStatus">Idle — 0 MB</p>
+      <p class="status" id="downloadStatus">Idle — 0 MB · 0.0 Mb/s</p>
       <p class="hint">Repeatedly fetches large remote files to keep the radio active.</p>
     </section>
 
@@ -95,9 +95,19 @@
           <span class="slider"></span>
         </label>
       </div>
+      <div class="controls">
+        <label>
+          Goal FPS <span id="goalFpsValue">30</span>
+          <input type="range" id="goalFpsSlider" min="5" max="60" value="30" step="1" />
+        </label>
+      </div>
       <canvas id="fractalCanvas" width="400" height="400"></canvas>
-      <p class="status">FPS: <span id="fpsCounter">0</span></p>
-      <p class="hint">Animated Julia set on canvas. Higher load on GPU/CPU.</p>
+      <p class="status">
+        FPS: <span id="fpsCounter">0</span>
+        · Load: <span id="loadCounter">—</span>
+        · Goal: <span id="goalFpsLabel">30</span>
+      </p>
+      <p class="hint">Animated Julia set. Load (iterations / resolution) auto-adjusts to hit goal FPS.</p>
     </section>
 
     <!-- Audio tone -->
