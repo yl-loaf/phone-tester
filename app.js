@@ -9,6 +9,7 @@
     camera: 1.8,     // camera pipeline + ISP
     vibrate: 0.9,    // haptic motor continuous
     location: 1.1,   // GNSS + radio assists
+    cpu: 4.0,        // multi-core busy workers (scaled by worker count)
     download: 1.5,   // radio + modem under load
     gpu: 3.5,        // heavy GPU (canvas or WebGL volume)
     tone: 0.4,       // speaker / audio amp
@@ -19,15 +20,23 @@
     camera: false,
     vibrate: false,
     location: false,
+    cpu: false,
     download: false,
     gpu: false,
     tone: false,
   };
 
+  let cpuWorkerCount = Math.min(8, Math.max(2, navigator.hardwareConcurrency || 4));
+
   function updatePower() {
     let total = 0.3; // baseline idle-ish browser
     for (const k of Object.keys(POWER)) {
-      if (active[k]) total += POWER[k];
+      if (!active[k]) continue;
+      if (k === "cpu") {
+        total += POWER.cpu * (cpuWorkerCount / 4);
+      } else {
+        total += POWER[k];
+      }
     }
     document.getElementById("powerWatts").textContent = total.toFixed(1);
   }
@@ -412,6 +421,157 @@
 
   document.getElementById("locationToggle").addEventListener("change", (e) => {
     setLocation(e.target.checked);
+  });
+
+  // ---------- CPU stress (Web Workers busy loops) ----------
+  let cpuWorkers = [];
+  let cpuOps = [];
+  let cpuStatusTimer = null;
+  let cpuBlobUrl = null;
+
+  const CPU_WORKER_SRC = `
+    let running = false;
+    let ops = 0;
+    function burn() {
+      // Mix of integer + float work so optimizers can't eliminate it
+      let x = 1.0001;
+      let n = 0x9e3779b9 | 0;
+      for (let i = 0; i < 50000; i++) {
+        n = (Math.imul(n, 1664525) + 1013904223) | 0;
+        x = Math.sin(x + (n & 0xffff) * 1e-6) * 1.0000001 + 0.5;
+        ops++;
+      }
+      if (running) {
+        // Yield to the event loop so the worker can receive stop messages
+        setTimeout(burn, 0);
+      }
+    }
+    self.onmessage = function (e) {
+      if (e.data === "start") {
+        running = true;
+        ops = 0;
+        burn();
+      } else if (e.data === "stop") {
+        running = false;
+      } else if (e.data === "stats") {
+        self.postMessage({ ops: ops });
+        ops = 0;
+      }
+    };
+  `;
+
+  function initCpuSlider() {
+    const cores = navigator.hardwareConcurrency || 4;
+    const slider = document.getElementById("cpuWorkersSlider");
+    const max = Math.min(16, Math.max(cores * 2, cores));
+    slider.max = String(max);
+    cpuWorkerCount = Math.min(max, Math.max(1, cores));
+    slider.value = String(cpuWorkerCount);
+    document.getElementById("cpuWorkersValue").textContent =
+      cpuWorkerCount + " (cores: " + cores + ")";
+  }
+
+  function stopCpuWorkers() {
+    cpuWorkers.forEach((w) => {
+      try {
+        w.postMessage("stop");
+        w.terminate();
+      } catch (_) {}
+    });
+    cpuWorkers = [];
+    cpuOps = [];
+    if (cpuStatusTimer) {
+      clearInterval(cpuStatusTimer);
+      cpuStatusTimer = null;
+    }
+    if (cpuBlobUrl) {
+      URL.revokeObjectURL(cpuBlobUrl);
+      cpuBlobUrl = null;
+    }
+  }
+
+  function setCpu(on) {
+    const status = document.getElementById("cpuStatus");
+    if (on) {
+      if (typeof Worker === "undefined") {
+        status.textContent = "Web Workers not supported";
+        status.className = "status warn";
+        document.getElementById("cpuToggle").checked = false;
+        return;
+      }
+      stopCpuWorkers();
+      const n = parseInt(document.getElementById("cpuWorkersSlider").value, 10) || cpuWorkerCount;
+      cpuWorkerCount = n;
+      try {
+        const blob = new Blob([CPU_WORKER_SRC], { type: "application/javascript" });
+        cpuBlobUrl = URL.createObjectURL(blob);
+        for (let i = 0; i < n; i++) {
+          const w = new Worker(cpuBlobUrl);
+          cpuWorkers.push(w);
+          cpuOps[i] = 0;
+          w.onmessage = (ev) => {
+            if (ev.data && typeof ev.data.ops === "number") {
+              cpuOps[i] = ev.data.ops;
+            }
+          };
+          w.postMessage("start");
+        }
+      } catch (err) {
+        status.textContent = "Error: " + (err.message || err);
+        status.className = "status warn";
+        document.getElementById("cpuToggle").checked = false;
+        stopCpuWorkers();
+        return;
+      }
+      active.cpu = true;
+      updatePower();
+      status.textContent = "Running " + n + " workers…";
+      status.className = "status on";
+
+      cpuStatusTimer = setInterval(() => {
+        if (!active.cpu) return;
+        cpuWorkers.forEach((w) => {
+          try { w.postMessage("stats"); } catch (_) {}
+        });
+        // Aggregate after a short delay so messages arrive
+        setTimeout(() => {
+          if (!active.cpu) return;
+          const total = cpuOps.reduce((a, b) => a + b, 0);
+          const mops = (total / 1e6).toFixed(1);
+          status.textContent =
+            n + " workers · ~" + mops + " M ops/s (tab must stay visible)";
+          status.className = "status on";
+        }, 80);
+      }, 1000);
+    } else {
+      active.cpu = false;
+      stopCpuWorkers();
+      status.textContent = "Off";
+      status.className = "status";
+      updatePower();
+    }
+  }
+
+  initCpuSlider();
+
+  document.getElementById("cpuToggle").addEventListener("change", (e) => {
+    setCpu(e.target.checked);
+  });
+
+  document.getElementById("cpuWorkersSlider").addEventListener("input", (e) => {
+    const v = parseInt(e.target.value, 10);
+    cpuWorkerCount = v;
+    const cores = navigator.hardwareConcurrency || 4;
+    document.getElementById("cpuWorkersValue").textContent =
+      v + " (cores: " + cores + ")";
+    if (active.cpu) {
+      // Restart with new worker count
+      setCpu(false);
+      document.getElementById("cpuToggle").checked = true;
+      setCpu(true);
+    } else {
+      updatePower();
+    }
   });
 
   // ---------- Network download stress ----------
@@ -1104,6 +1264,7 @@
     setTorch(false);
     setCamera(false);
     setLocation(false);
+    setCpu(false);
     setGpu(false);
     setTone(false);
   });
@@ -1137,7 +1298,7 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "10";
+  const BUILD_ID = "11";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
