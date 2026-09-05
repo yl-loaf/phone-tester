@@ -8,6 +8,7 @@
     torch: 1.2,      // LED flashlight
     camera: 1.8,     // camera pipeline + ISP
     vibrate: 0.9,    // haptic motor continuous
+    location: 1.1,   // GNSS + radio assists
     download: 1.5,   // radio + modem under load
     gpu: 3.5,        // heavy GPU (canvas or WebGL volume)
     tone: 0.4,       // speaker / audio amp
@@ -17,6 +18,7 @@
     torch: false,
     camera: false,
     vibrate: false,
+    location: false,
     download: false,
     gpu: false,
     tone: false,
@@ -240,6 +242,114 @@
 
   document.getElementById("vibrateToggle").addEventListener("change", (e) => {
     setVibrate(e.target.checked);
+  });
+
+  // ---------- Location ping (continuous high-accuracy) ----------
+  let locationWatchId = null;
+  let locationPingTimer = null;
+  let locationCount = 0;
+  let locationLast = null;
+
+  function formatLoc(pos) {
+    const c = pos.coords;
+    return (
+      c.latitude.toFixed(5) + ", " + c.longitude.toFixed(5) +
+      " ±" + Math.round(c.accuracy) + "m" +
+      (c.altitude != null ? " · alt " + Math.round(c.altitude) + "m" : "")
+    );
+  }
+
+  function requestOneLocation() {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        locationCount++;
+        locationLast = pos;
+        const status = document.getElementById("locationStatus");
+        if (!active.location) return;
+        status.textContent =
+          "Ping #" + locationCount + " — " + formatLoc(pos);
+        status.className = "status on";
+      },
+      (err) => {
+        const status = document.getElementById("locationStatus");
+        if (!active.location) return;
+        status.textContent = "Error: " + (err.message || "code " + err.code);
+        status.className = "status warn";
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 15000,
+      }
+    );
+  }
+
+  function setLocation(on) {
+    const status = document.getElementById("locationStatus");
+    if (on) {
+      if (!navigator.geolocation) {
+        status.textContent = "Geolocation not supported";
+        status.className = "status warn";
+        document.getElementById("locationToggle").checked = false;
+        return;
+      }
+      locationCount = 0;
+      active.location = true;
+      updatePower();
+      status.textContent = "Requesting location…";
+      status.className = "status on";
+
+      // watchPosition for continuous updates
+      try {
+        locationWatchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            locationCount++;
+            locationLast = pos;
+            if (!active.location) return;
+            status.textContent =
+              "Ping #" + locationCount + " — " + formatLoc(pos);
+            status.className = "status on";
+          },
+          (err) => {
+            if (!active.location) return;
+            status.textContent = "Watch: " + (err.message || "code " + err.code);
+            status.className = "status warn";
+          },
+          {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 20000,
+          }
+        );
+      } catch (_) {}
+
+      // Also force getCurrentPosition on a short interval (some browsers throttle watch)
+      requestOneLocation();
+      locationPingTimer = setInterval(requestOneLocation, 3000);
+    } else {
+      active.location = false;
+      if (locationWatchId != null && navigator.geolocation) {
+        try {
+          navigator.geolocation.clearWatch(locationWatchId);
+        } catch (_) {}
+        locationWatchId = null;
+      }
+      if (locationPingTimer) {
+        clearInterval(locationPingTimer);
+        locationPingTimer = null;
+      }
+      status.textContent =
+        locationCount > 0
+          ? "Off — " + locationCount + " pings total"
+          : "Off";
+      status.className = "status";
+      updatePower();
+    }
+  }
+
+  document.getElementById("locationToggle").addEventListener("change", (e) => {
+    setLocation(e.target.checked);
   });
 
   // ---------- Network download stress ----------
@@ -587,7 +697,7 @@
       float t = 0.0;
       float d = 1.0;
       int hit = 0;
-      for (int i = 0; i < 400; i++) {
+      for (int i = 0; i < 768; i++) {
         if (float(i) >= u_steps) break;
         vec3 p = ro + rd * t;
         d = map(p);
@@ -626,17 +736,17 @@
   }
 
   function applyWebglLoad(level) {
-    // Allow >100 for sub-15 FPS targets (extra passes / scale beyond base max)
-    webglLoad = Math.max(5, Math.min(160, level));
+    // Allow >100 for sub-15 FPS targets (extra passes / scale / steps)
+    webglLoad = Math.max(5, Math.min(200, level));
     const t = Math.min(webglLoad, 100) / 100;
-    const over = Math.max(0, webglLoad - 100); // 0–60 beyond 100%
+    const over = Math.max(0, webglLoad - 100); // 0–100 beyond 100%
 
-    // scale: 0.45 → 2.0 at 100%, up to ~2.8 past 100%
-    webglScale = 0.45 + t * 1.55 + over * 0.014;
-    // ray steps: 40 → 360 at 100%, up to ~480 past 100%
-    webglSteps = Math.round(40 + t * 320 + over * 2);
-    // passes: 1 → 5 at 100%, up to 12 past 100%
-    webglPasses = Math.max(1, Math.round(1 + t * 4 + over * 0.12));
+    // scale: 0.45 → 2.0 at 100%, up to ~3.2 past 100%
+    webglScale = 0.45 + t * 1.55 + over * 0.012;
+    // ray steps: 40 → 400 at 100%, up to ~700 past 100% (hits low goal FPS)
+    webglSteps = Math.round(40 + t * 360 + over * 3);
+    // passes: 1 → 6 at 100%, up to 16 past 100%
+    webglPasses = Math.max(1, Math.round(1 + t * 5 + over * 0.1));
 
     if (!gl) return;
 
@@ -663,25 +773,27 @@
     if (g >= 50) return 15;
     if (g >= 35) return 30;
     if (g >= 20) return 50;
-    if (g >= 15) return 70;
-    if (g >= 8) return 100;
-    return 130; // very low goals start past 100%
+    if (g >= 15) return 75;
+    if (g >= 10) return 120; // ≤10 → start past 100% with more steps
+    if (g >= 5) return 150;
+    return 180;
   }
 
   function adjustWebglTowardGoal() {
     if (fps <= 0) return;
     const error = goalFps - fps;
-    // Tighter dead zone at low goals so we keep pushing
-    const dead = goalFps < 15 ? 1.5 : 3;
+    const dead = goalFps <= 10 ? 1 : goalFps < 15 ? 1.5 : 3;
     if (Math.abs(error) < dead) return;
 
     let step = Math.max(3, Math.min(12, Math.abs(error) * 0.8));
-    // When aiming below 15 and still too fast, ramp harder / allow over-100
-    if (error < 0 && goalFps < 15) {
+    // Near/below 10 FPS goal: push steps/passes hard if still too fast
+    if (error < 0 && goalFps <= 10) {
+      step = Math.max(10, Math.min(25, Math.abs(error) * 2));
+    } else if (error < 0 && goalFps < 15) {
       step = Math.max(6, Math.min(20, Math.abs(error) * 1.5));
     }
-    if (error < 0) applyWebglLoad(webglLoad + step); // too fast → heavier
-    else applyWebglLoad(webglLoad - step);           // too slow → lighter
+    if (error < 0) applyWebglLoad(webglLoad + step);
+    else applyWebglLoad(webglLoad - step);
   }
 
   function initWebGL() {
@@ -929,8 +1041,33 @@
     setVibrate(false);
     setTorch(false);
     setCamera(false);
+    setLocation(false);
     setGpu(false);
     setTone(false);
+  });
+
+  // ---------- Light / dark theme ----------
+  function applyTheme(light) {
+    document.documentElement.classList.toggle("light", light);
+    const btn = document.getElementById("themeToggle");
+    if (btn) btn.textContent = light ? "Dark" : "Light";
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", light ? "#f2f3f7" : "#0a0a0f");
+    try {
+      localStorage.setItem("pst-theme", light ? "light" : "dark");
+    } catch (_) {}
+  }
+
+  (function initTheme() {
+    let light = false;
+    try {
+      light = localStorage.getItem("pst-theme") === "light";
+    } catch (_) {}
+    applyTheme(light);
+  })();
+
+  document.getElementById("themeToggle").addEventListener("click", () => {
+    applyTheme(!document.documentElement.classList.contains("light"));
   });
 
   // Initial power
@@ -938,20 +1075,17 @@
 
   // ---------- Auto-update (detect new deploy without hard refresh) ----------
   // Bump BUILD_ID whenever you push a new version to GitHub Pages.
-  const BUILD_ID = "8";
+  const BUILD_ID = "9";
   const CHECK_EVERY_MS = 45_000;
 
   async function checkForUpdate() {
     try {
-      // Fetch index.html with cache-bust so we always see the latest deploy
       const res = await fetch("index.html?_=" + Date.now(), { cache: "no-store" });
       if (!res.ok) return;
       const html = await res.text();
-      // Look for styles.css?v=N or app.js?v=N or buildTag text
       const match = html.match(/[?&]v=(\d+)/) || html.match(/build-tag[^>]*>v?(\d+)/i);
       if (match && match[1] !== BUILD_ID) {
-        // Soft reload to pick up new assets
-        location.reload();
+        window.location.reload();
       }
     } catch (_) {
       // offline / CORS — ignore
